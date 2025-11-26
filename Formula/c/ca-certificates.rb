@@ -147,14 +147,35 @@ class CaCertificates < Formula
     rm(pkgetc/"cert.pem", force: true)
     pkgetc.mkpath
 
-    ca_certificate_paths = [
-      "/etc/ssl/certs/ca-certificates.crt", # Debian/Ubuntu, Alpine Linux, Arch Linux
-      "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", # RHEL/CentOS/Fedora, Amazon Linux
-      "/etc/ssl/ca-bundle.pem", # SUSE/openSUSE
-    ]
-    system_ca_certificates = ca_certificate_paths.map { |p| Pathname.new(p) }
-                                                 .find { |pn| pn.file? && pn.readable? }
-    return unless system_ca_certificates
+    system_ca_certificates = begin
+      raise "Can't find /usr/bin/openssl" unless which("/usr/bin/openssl")
+      openssl_match = Utils.safe_popen_read("/usr/bin/openssl", "version", "-d").match(/OPENSSLDIR: "(.*)"/)
+      raise "Can't read OPENSSLDIR from /usr/bin/openssl" unless openssl_match
+
+      openssl_dir = Pathname.new(openssl_match[1])
+      system_ca_certificates = openssl_dir/"cert.pem"
+      raise "Can't read #{system_ca_certificates}" unless system_ca_certificates.file? && system_ca_certificates.readable?
+      
+      system_ca_certificates
+    rescue => e
+      opoo "Can't find system certificates using /usr/bin/openssl: #{e}"
+      puts "Falling back to looking for CA certs in predetermined locations."
+      ca_certificate_paths = [
+        "/etc/ssl/certs/ca-certificates.crt", # Debian/Ubuntu, Alpine Linux, Arch Linux
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", # RHEL/CentOS/Fedora, Amazon Linux
+        "/etc/ssl/ca-bundle.pem", # SUSE/openSUSE
+      ]
+      system_ca_certificates = ca_certificate_paths.map { |p| Pathname.new(p) }
+                                                   .find { |pn| pn.file? && pn.readable? }
+      unless system_ca_certificates
+        opoo "Can't find system certificates at these paths:\n  #{ca_certificate_paths.join("\n  ")}"
+        return
+      end
+
+      system_ca_certificates
+    end
+
+    ohai "Found system certificates at #{system_ca_certificates.to_s}"
 
     # Integrate system certificates if OpenSSL is available
     unless which("openssl")
